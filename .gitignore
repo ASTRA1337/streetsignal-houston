@@ -1,0 +1,28 @@
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# VS Code local settings
+.vscode/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Local databases
+*.duckdb
+*.duckdb.wal
+
+# Temporary files and logs
+*.log
+*.tmp
