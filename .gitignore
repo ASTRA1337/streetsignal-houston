@@ -30,3 +30,6 @@ Thumbs.db
 *.egg-info/
 build/
 dist/
+
+# Local databases and raw datasets
+/data/
