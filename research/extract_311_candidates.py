@@ -6,7 +6,7 @@ proof of an infrastructure issue at the intersection. Stdlib-only.
 """
 
 import csv
-import math
+from streetsignal.screening import screen_record
 import sys
 from collections import Counter
 from pathlib import Path
@@ -41,17 +41,7 @@ EXPORT_FIELDS = (
 )
 
 
-def distance_m(lat, lon):
-    radius = 6_371_000
-    a1, a2 = math.radians(REFERENCE_LAT), math.radians(lat)
-    da, dl = a2 - a1, math.radians(lon - REFERENCE_LON)
 
-    a = (
-        math.sin(da / 2) ** 2
-        + math.cos(a1) * math.cos(a2) * math.sin(dl / 2) ** 2
-    )
-
-    return 2 * radius * math.asin(min(1.0, math.sqrt(a)))
 
 
 def main(source):
@@ -135,32 +125,20 @@ def main(source):
                     latest = (
                         max(latest, day) if latest else day
                     )
-
-                try:
-                    lat = float(rec["Latitude"])
-                    lon = float(rec["Longitude"])
-
-                    if -90 <= lat <= 90 and -180 <= lon <= 180:
-                        distance = distance_m(lat, lon)
-                    else:
-                        distance = None
-
-                except (ValueError, TypeError):
-                    distance = None
-
-                nearby = (
-                    distance is not None
-                    and distance <= SCREENING_RADIUS_M
+                result = screen_record(
+                    rec,
+                    reference_lat=REFERENCE_LAT,
+                    reference_lon=REFERENCE_LON,
+                    street_a="Bissonnet",
+                    street_b="Wilcrest",
+                    text_fields=NAME_FIELDS,
+                    radius_m=SCREENING_RADIUS_M,
                 )
 
-                combined = " ".join(
-                    rec[k] for k in NAME_FIELDS
-                ).upper()
+                distance = result.distance_m
+                nearby = result.within_radius
+                named = result.both_streets_named
 
-                named = (
-                    "BISSONNET" in combined
-                    and "WILCREST" in combined
-                )
 
                 if not (nearby or named):
                     continue
