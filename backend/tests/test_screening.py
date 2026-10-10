@@ -1,5 +1,5 @@
 
-from streetsignal.screening import screen_record
+from backend.src.streetsignal.screening import screen_record
 
 
 # Reference intersection used for our pilot case.

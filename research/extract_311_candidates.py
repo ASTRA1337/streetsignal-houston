@@ -6,7 +6,7 @@ proof of an infrastructure issue at the intersection. Stdlib-only.
 """
 
 import csv
-from streetsignal.screening import screen_record
+from backend.src.streetsignal.screening import screen_record
 import sys
 from collections import Counter
 from pathlib import Path
@@ -32,6 +32,7 @@ EXPORT_FIELDS = (
     "Incident Case Type",
     "Status",
     "Incident Address",
+    "Incident Street",
     "Latitude",
     "Longitude",
     "Title",

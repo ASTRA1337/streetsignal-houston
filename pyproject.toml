@@ -14,7 +14,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["backend/src"]
 include = ["streetsignal*"]
 
 [project.optional-dependencies]
@@ -23,4 +23,4 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["backend/tests"]
