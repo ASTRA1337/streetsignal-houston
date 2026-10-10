@@ -26,3 +26,7 @@ Thumbs.db
 # Temporary files and logs
 *.log
 *.tmp
+# Python packaging and build artifacts
+*.egg-info/
+build/
+dist/
