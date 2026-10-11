@@ -6,8 +6,6 @@ import runpy
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 
 IMPORTER_PATH = (
     Path(__file__).resolve().parents[1]
@@ -42,6 +40,7 @@ def sample_archive(extract_date="2026-10-10"):
 
 
 def test_import_preserves_source_records(tmp_path):
+    """Verify original source fields and duplicate case rows are retained."""
     archive = tmp_path / "311-2026.txt"
     database = tmp_path / "streetsignal.sqlite"
 
@@ -75,6 +74,7 @@ def test_import_preserves_source_records(tmp_path):
 
 
 def test_duplicate_import_is_skipped(tmp_path):
+    """The same source archive must not be imported twice."""
     archive = tmp_path / "311-2026.txt"
     database = tmp_path / "streetsignal.sqlite"
 
@@ -98,6 +98,7 @@ def test_duplicate_import_is_skipped(tmp_path):
 
 
 def test_extract_date_does_not_change_content_hash(tmp_path):
+    """Changing only Extract Date should not alter record content hashes."""
     database = tmp_path / "streetsignal.sqlite"
 
     first_archive = tmp_path / "extract_a.txt"
@@ -125,34 +126,61 @@ def test_extract_date_does_not_change_content_hash(tmp_path):
             """
         ).fetchall()
 
-    # Different source snapshots, same underlying case contents.
+    # Two source snapshots, each with the same two record versions.
     assert len(hashes) == 4
     assert hashes[:2] == hashes[2:]
 
 
-def test_malformed_record_rolls_back_import(tmp_path):
+def test_malformed_record_is_quarantined(tmp_path):
+    """Malformed records are preserved separately without stopping imports."""
     archive = tmp_path / "broken.txt"
     database = tmp_path / "streetsignal.sqlite"
 
+    # Remove one delimiter from the second record.
+    # This produces seven fields instead of eight.
     archive.write_text(
         sample_archive().replace(
-            "Signal still out",
-            "Signal|still|out",
+            "Signal still out|2026-10-10",
+            "Signal still out 2026-10-10",
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Invalid row"):
-        import_archive(archive, database)
+    result = import_archive(archive, database)
+
+    # One valid row; one repeated header; one quarantined row.
+    assert result[1:] == (1, 1)
 
     with sqlite3.connect(database) as connection:
-        imports = connection.execute(
-            "SELECT COUNT(*) FROM source_imports"
-        ).fetchone()[0]
+        counts = connection.execute(
+            """
+            SELECT record_count, malformed_row_count
+            FROM source_imports
+            """
+        ).fetchone()
 
-        records = connection.execute(
+        quarantined = connection.execute(
+            """
+            SELECT
+                source_line_number,
+                expected_field_count,
+                actual_field_count,
+                original_line
+            FROM raw_311_malformed_rows
+            """
+        ).fetchone()
+
+        valid_records = connection.execute(
             "SELECT COUNT(*) FROM raw_311_requests"
         ).fetchone()[0]
 
-    assert imports == 0
-    assert records == 0
+    assert counts == (1, 1)
+    assert valid_records == 1
+
+    assert quarantined is not None
+    assert quarantined[0:3] == (6, 8, 7)
+
+    # The exact malformed source line must be preserved.
+    assert quarantined[3] == archive.read_text(
+        encoding="utf-8"
+    ).splitlines()[5]

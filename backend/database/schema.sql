@@ -106,3 +106,20 @@ CREATE INDEX IF NOT EXISTS idx_311_case_type
 -- Geographic filtering for any supported intersection.
 CREATE INDEX IF NOT EXISTS idx_311_location
     ON raw_311_requests (latitude, longitude);
+
+
+
+-- Preserve malformed 311 source rows for later review.
+-- Never guess missing field positions or silently discard evidence.
+CREATE TABLE IF NOT EXISTS raw_311_malformed_rows (
+    import_id INTEGER NOT NULL,
+    source_line_number INTEGER NOT NULL,
+    expected_field_count INTEGER NOT NULL,
+    actual_field_count INTEGER NOT NULL,
+    original_line TEXT NOT NULL,
+
+    PRIMARY KEY (import_id, source_line_number),
+
+    FOREIGN KEY (import_id)
+        REFERENCES source_imports(id)
+);

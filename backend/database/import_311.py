@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+
 DEFAULT_DB_PATH = (
     Path(__file__).resolve().parents[2]
     / "data"
@@ -28,17 +29,26 @@ REQUIRED_HEADERS = {
 
 def file_sha256(path: Path) -> str:
     """Calculate a source file's SHA-256 checksum."""
+
     digest = hashlib.sha256()
 
     with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+        for chunk in iter(
+            lambda: source.read(1024 * 1024),
+            b"",
+        ):
             digest.update(chunk)
 
     return digest.hexdigest()
 
 
-def coordinate(value: str, lower: float, upper: float) -> float | None:
+def coordinate(
+    value: str,
+    lower: float,
+    upper: float,
+) -> float | None:
     """Convert valid source coordinates to numbers."""
+
     if not value.strip():
         return None
 
@@ -54,7 +64,7 @@ def import_archive(
     source_path: Path,
     database_path: Path,
 ) -> tuple[int, int, int] | None:
-    """Import one complete archive, preserving original rows and fields."""
+    """Import one complete 311 archive while preserving source evidence."""
 
     source_path = source_path.resolve()
 
@@ -62,13 +72,21 @@ def import_archive(
         raise FileNotFoundError(source_path)
 
     checksum = file_sha256(source_path)
-    database_path.parent.mkdir(parents=True, exist_ok=True)
+
+    database_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     with sqlite3.connect(database_path) as connection:
+
+        # Initialize missing tables and indexes.
+        # Existing tables and imported records are preserved.
         connection.executescript(
             SCHEMA_PATH.read_text(encoding="utf-8")
         )
 
+        # Prevent importing the exact same source file twice.
         existing = connection.execute(
             """
             SELECT id
@@ -94,21 +112,30 @@ def import_archive(
 
             extract_time = None
 
-            for line_number, line in enumerate(source, start=1):
+            # Read source metadata and locate the original headers.
+            for line_number, line in enumerate(
+                source,
+                start=1,
+            ):
                 text = line.rstrip("\r\n")
 
                 if (
                     text.startswith("Extract date-time: [")
                     and text.endswith("]")
                 ):
-                    extract_time = text.split("[", 1)[1][:-1]
+                    extract_time = text.split(
+                        "[", 1
+                    )[1][:-1]
 
                 if text.startswith("365 Case Number|"):
                     header_line = text
                     headers = text.split("|")
                     break
+
             else:
-                raise ValueError("No Houston 311 header found")
+                raise ValueError(
+                    "No Houston 311 header found"
+                )
 
             if (
                 len(headers) != len(set(headers))
@@ -118,6 +145,8 @@ def import_archive(
                     "Missing or duplicated expected source headers"
                 )
 
+            # Keep the file import atomic.
+            # A database failure must not leave a partial import.
             connection.execute("BEGIN IMMEDIATE")
 
             result = connection.execute(
@@ -136,14 +165,19 @@ def import_archive(
                     source_path.name,
                     checksum,
                     extract_time,
-                    json.dumps(headers, ensure_ascii=False),
+                    json.dumps(
+                        headers,
+                        ensure_ascii=False,
+                    ),
                 ),
             )
 
             import_id = result.lastrowid
+
             batch = []
             count = 0
             repeated_headers = 0
+            malformed_rows = 0
 
             insert_sql = """
                 INSERT INTO raw_311_requests (
@@ -176,35 +210,58 @@ def import_archive(
                 )
             """
 
+            quarantine_sql = """
+                INSERT INTO raw_311_malformed_rows (
+                    import_id,
+                    source_line_number,
+                    expected_field_count,
+                    actual_field_count,
+                    original_line
+                )
+                VALUES (?, ?, ?, ?, ?)
+            """
+
+            # Process the complete citywide archive.
             for line_number, line in enumerate(
                 source,
                 start=line_number + 1,
             ):
                 text = line.rstrip("\r\n")
 
-                # Ignore blank lines and the source's EOF marker.
+                # Ignore blank lines and source EOF markers.
                 if text in ("", "\x1a"):
                     continue
 
-                # The 2026 archive repeats its header 11 times.
+                # Some archives repeat their headers throughout the file.
                 if text == header_line:
                     repeated_headers += 1
                     continue
 
                 values = text.split("|")
 
-                # Never silently discard malformed source records.
+                # Preserve malformed rows without guessing
+                # where missing or extra fields belong.
                 if len(values) != len(headers):
-                    raise ValueError(
-                        f"Invalid row at source line {line_number}: "
-                        f"expected {len(headers)} values, "
-                        f"got {len(values)}"
+
+                    connection.execute(
+                        quarantine_sql,
+                        (
+                            import_id,
+                            line_number,
+                            len(headers),
+                            len(values),
+                            text,
+                        ),
                     )
 
+                    malformed_rows += 1
+                    continue
+
+                # Preserve every original source field.
                 record = dict(zip(headers, values))
 
-                # Extract Date changes between snapshots without
-                # necessarily changing the underlying service request.
+                # Exclude only Extract Date when comparing
+                # meaningful record content between snapshots.
                 canonical = {
                     key: value
                     for key, value in record.items()
@@ -241,10 +298,14 @@ def import_archive(
                         record.get("Incident State"),
                         record.get("Zip Code"),
                         coordinate(
-                            record.get("Latitude", ""), -90, 90
+                            record.get("Latitude", ""),
+                            -90,
+                            90,
                         ),
                         coordinate(
-                            record.get("Longitude", ""), -180, 180
+                            record.get("Longitude", ""),
+                            -180,
+                            180,
                         ),
                         content_hash,
                         json.dumps(
@@ -255,37 +316,58 @@ def import_archive(
                     )
                 )
 
+                # Insert valid records in batches.
                 if len(batch) == BATCH_SIZE:
-                    connection.executemany(insert_sql, batch)
+                    connection.executemany(
+                        insert_sql,
+                        batch,
+                    )
+
                     count += len(batch)
                     batch.clear()
 
+            # Insert any remaining valid records.
             if batch:
-                connection.executemany(insert_sql, batch)
+                connection.executemany(
+                    insert_sql,
+                    batch,
+                )
                 count += len(batch)
 
+            # Record final import and quality statistics.
             connection.execute(
                 """
                 UPDATE source_imports
                 SET record_count = ?,
-                    repeated_header_count = ?
+                    repeated_header_count = ?,
+                    malformed_row_count = ?
                 WHERE id = ?
                 """,
-                (count, repeated_headers, import_id),
+                (
+                    count,
+                    repeated_headers,
+                    malformed_rows,
+                    import_id,
+                ),
             )
 
             connection.commit()
 
     print(
         f"Imported {count:,} 311 rows; "
-        f"skipped {repeated_headers} repeated headers"
+        f"skipped {repeated_headers} repeated headers; "
+        f"quarantined {malformed_rows} malformed rows"
     )
 
     return import_id, count, repeated_headers
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    """Run the importer from the command line."""
+
+    parser = argparse.ArgumentParser(
+        description=__doc__
+    )
 
     parser.add_argument(
         "archive",
@@ -301,7 +383,10 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    import_archive(args.archive, args.db)
+    import_archive(
+        args.archive,
+        args.db,
+    )
 
 
 if __name__ == "__main__":
